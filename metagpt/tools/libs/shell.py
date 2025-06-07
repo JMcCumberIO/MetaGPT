@@ -15,7 +15,7 @@ async def shell_execute(
 
     Args:
         command (Union[List[str], str]): The command to execute and its arguments. It can be provided either as a list
-            of strings or as a single string.
+            of strings (recommended for security) or as a single string.
         cwd (str | Path, optional): The current working directory for the command. Defaults to None.
         env (Dict, optional): Environment variables to set for the command. Defaults to None.
         timeout (int, optional): Timeout for the command execution in seconds. Defaults to 600.
@@ -23,8 +23,18 @@ async def shell_execute(
     Returns:
         Tuple[str, str, int]: A tuple containing the string type standard output and string type standard error of the executed command and int type return code.
 
+    **Security Warning:**
+        If `command` is provided as a string, this function uses `shell=True` for `subprocess.run`. This can be a
+        security hazard if the command string is constructed from external input, such as LLM outputs, as it
+        may allow for shell injection.
+        It is **strongly recommended** to use `command` as a `list` of arguments (e.g., `['ls', '-l']`)
+        whenever possible, especially when parts of the command are dynamic or come from untrusted sources.
+        This approach uses `shell=False`, which is inherently more secure.
+        If you must use a string command (implying `shell=True`), you are responsible for ensuring that the
+        command is properly sanitized and does not contain any malicious shell metacharacters.
+
     Raises:
-        ValueError: If the command times out, this error is raised. The error message contains both standard output and
+        subprocess.TimeoutExpired: If the command times out, this error is raised. The error message contains both standard output and
          standard error of the timed-out process.
 
     Example:

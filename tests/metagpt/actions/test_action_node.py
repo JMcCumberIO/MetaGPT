@@ -6,12 +6,16 @@
 @File    : test_action_node.py
 """
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
+import ast
 
 import pytest
 from pydantic import BaseModel, Field, ValidationError
+from unittest.mock import patch, MagicMock
 
 from metagpt.actions import Action
+from metagpt.llm import BaseLLM
+from metagpt.logs import logger
 from metagpt.actions.action_node import ActionNode, ReviewMode, ReviseMode
 from metagpt.environment import Environment
 from metagpt.llm import LLM
@@ -314,6 +318,118 @@ def test_optional():
 
     t1 = t(**m)
     assert t1
+
+
+@pytest.mark.asyncio
+@patch("metagpt.actions.action_node.logger")
+async def test_action_node_xml_fill_valid_list(mock_logger_warning, mocker):
+    mocker.patch("metagpt.llm.BaseLLM.aask", return_value="<test_list_key>['a', 1, {'b': 2}]</test_list_key>")
+    node = ActionNode(key="test_list_key", expected_type=List[Any], instruction="instruction", example="['example']")
+    node.llm = MagicMock(spec=BaseLLM) # Mock llm attribute
+
+    result = await node.xml_fill(context="<prompt>Some prompt</prompt>")
+
+    assert "test_list_key" in result
+    assert result["test_list_key"] == ['a', 1, {'b': 2}]
+    mock_logger_warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("metagpt.actions.action_node.logger")
+async def test_action_node_xml_fill_valid_dict(mock_logger_warning, mocker):
+    mocker.patch("metagpt.llm.BaseLLM.aask", return_value="<test_dict_key>{'key1': 'value1', 'key2': 10}</test_dict_key>")
+    node = ActionNode(key="test_dict_key", expected_type=Dict[str, Any], instruction="instruction", example="{'ex_k': 'ex_v'}")
+    node.llm = MagicMock(spec=BaseLLM)
+
+    result = await node.xml_fill(context="<prompt>Some prompt</prompt>")
+
+    assert "test_dict_key" in result
+    assert result["test_dict_key"] == {'key1': 'value1', 'key2': 10}
+    mock_logger_warning.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("metagpt.actions.action_node.logger")
+async def test_action_node_xml_fill_malformed_list(mock_logger_warning, mocker):
+    mocker.patch("metagpt.llm.BaseLLM.aask", return_value="<test_malformed_list>['a', 1, {'b': 2]</test_malformed_list>") # Missing closing brace
+    node = ActionNode(key="test_malformed_list", expected_type=List[Any], instruction="instruction", example="[]")
+    node.llm = MagicMock(spec=BaseLLM)
+
+    result = await node.xml_fill(context="<prompt>Some prompt</prompt>")
+
+    assert "test_malformed_list" in result
+    assert result["test_malformed_list"] == []
+    mock_logger_warning.assert_called_once()
+    assert "Failed to parse list for field 'test_malformed_list'" in mock_logger_warning.call_args[0][0]
+
+
+@pytest.mark.asyncio
+@patch("metagpt.actions.action_node.logger")
+async def test_action_node_xml_fill_malformed_dict(mock_logger_warning, mocker):
+    mocker.patch("metagpt.llm.BaseLLM.aask", return_value="<test_malformed_dict>{'key1': 'value1', 'key2':</test_malformed_dict>") # Missing value and closing brace
+    node = ActionNode(key="test_malformed_dict", expected_type=Dict[str, Any], instruction="instruction", example="{}")
+    node.llm = MagicMock(spec=BaseLLM)
+
+    result = await node.xml_fill(context="<prompt>Some prompt</prompt>")
+
+    assert "test_malformed_dict" in result
+    assert result["test_malformed_dict"] == {}
+    mock_logger_warning.assert_called_once()
+    assert "Failed to parse dict for field 'test_malformed_dict'" in mock_logger_warning.call_args[0][0]
+
+
+@pytest.mark.asyncio
+@patch("metagpt.actions.action_node.logger")
+async def test_action_node_xml_fill_security_string_payload_as_string_field(mock_logger_warning, mocker):
+    payload = "__import__('os').system('echo pwned')"
+    mocker.patch("metagpt.llm.BaseLLM.aask", return_value=f"<security_string_key>{payload}</security_string_key>")
+    node = ActionNode(key="security_string_key", expected_type=str, instruction="instruction", example="some string")
+    node.llm = MagicMock(spec=BaseLLM)
+
+    # Mock os.system to ensure it's not called
+    with patch('os.system') as mock_os_system:
+        result = await node.xml_fill(context="<prompt>Some prompt</prompt>")
+
+        assert "security_string_key" in result
+        assert result["security_string_key"] == payload # ast.literal_eval returns the string itself
+        mock_logger_warning.assert_not_called()
+        mock_os_system.assert_not_called() # Crucial security check
+
+
+@pytest.mark.asyncio
+@patch("metagpt.actions.action_node.logger")
+async def test_action_node_xml_fill_security_string_payload_as_list_field(mock_logger_warning, mocker):
+    payload = "__import__('os').system('echo pwned')"
+    mocker.patch("metagpt.llm.BaseLLM.aask", return_value=f"<security_list_key>{payload}</security_list_key>")
+    node = ActionNode(key="security_list_key", expected_type=List[Any], instruction="instruction", example="[]")
+    node.llm = MagicMock(spec=BaseLLM)
+
+    with patch('os.system') as mock_os_system:
+        result = await node.xml_fill(context="<prompt>Some prompt</prompt>")
+
+        assert "security_list_key" in result
+        assert result["security_list_key"] == [] # Should default to empty list due to parsing error
+        mock_logger_warning.assert_called_once()
+        assert "Failed to parse list for field 'security_list_key'" in mock_logger_warning.call_args[0][0]
+        mock_os_system.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("metagpt.actions.action_node.logger")
+async def test_action_node_xml_fill_security_string_payload_as_dict_field(mock_logger_warning, mocker):
+    payload = "__import__('os').system('echo pwned')"
+    mocker.patch("metagpt.llm.BaseLLM.aask", return_value=f"<security_dict_key>{payload}</security_dict_key>")
+    node = ActionNode(key="security_dict_key", expected_type=Dict[Any, Any], instruction="instruction", example="{}")
+    node.llm = MagicMock(spec=BaseLLM)
+
+    with patch('os.system') as mock_os_system:
+        result = await node.xml_fill(context="<prompt>Some prompt</prompt>")
+
+        assert "security_dict_key" in result
+        assert result["security_dict_key"] == {} # Should default to empty dict due to parsing error
+        mock_logger_warning.assert_called_once()
+        assert "Failed to parse dict for field 'security_dict_key'" in mock_logger_warning.call_args[0][0]
+        mock_os_system.assert_not_called()
 
 
 if __name__ == "__main__":
