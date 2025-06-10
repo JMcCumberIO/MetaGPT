@@ -11,6 +11,7 @@ NOTE: You should use typing.List instead of list to do type annotation. Because 
 import json
 import re
 import typing
+import ast
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
@@ -578,18 +579,26 @@ class ActionNode:
                     extracted_data[field_name] = raw_value.lower() in ("true", "yes", "1", "on", "True")
                 elif field_type == list:
                     try:
-                        extracted_data[field_name] = eval(raw_value)
-                        if not isinstance(extracted_data[field_name], list):
-                            raise ValueError
-                    except:
-                        extracted_data[field_name] = []  # 默认空列表
+                        evaluated_value = ast.literal_eval(raw_value)
+                        if not isinstance(evaluated_value, list):
+                            logger.warning(f"Parsed value for field '{field_name}' is not a list, defaulting to empty list. Raw value: {raw_value}")
+                            extracted_data[field_name] = []
+                        else:
+                            extracted_data[field_name] = evaluated_value
+                    except (ValueError, SyntaxError) as e:
+                        logger.warning(f"Failed to parse list for field '{field_name}': {e}. Raw value: {raw_value}. Defaulting to empty list.")
+                        extracted_data[field_name] = []
                 elif field_type == dict:
                     try:
-                        extracted_data[field_name] = eval(raw_value)
-                        if not isinstance(extracted_data[field_name], dict):
-                            raise ValueError
-                    except:
-                        extracted_data[field_name] = {}  # 默认空字典
+                        evaluated_value = ast.literal_eval(raw_value)
+                        if not isinstance(evaluated_value, dict):
+                            logger.warning(f"Parsed value for field '{field_name}' is not a dict, defaulting to empty dict. Raw value: {raw_value}")
+                            extracted_data[field_name] = {}
+                        else:
+                            extracted_data[field_name] = evaluated_value
+                    except (ValueError, SyntaxError) as e:
+                        logger.warning(f"Failed to parse dict for field '{field_name}': {e}. Raw value: {raw_value}. Defaulting to empty dict.")
+                        extracted_data[field_name] = {}
 
         return extracted_data
 
