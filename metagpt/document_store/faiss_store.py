@@ -83,13 +83,35 @@ class FaissStore(LocalStore):
         self.persist()
         return self.store
 
-    def add(self, texts: list[str], *args, **kwargs) -> list[str]:
-        """FIXME: Currently, the store is not updated after adding."""
-        texts_embeds = self.embedding.get_text_embedding_batch(texts)
-        nodes = [TextNode(text=texts[idx], embedding=embed) for idx, embed in enumerate(texts_embeds)]
-        self.store.insert_nodes(nodes)
+    def add(self, texts: list[str], metadatas: list[dict[str, Any]] = None, *args, **kwargs) -> list[str]:
+        """Add new texts to the index and persist the updated store to disk.
 
-        return []
+        Args:
+            texts: List of text strings to embed and insert.
+            metadatas: Optional list of metadata dicts, one per text.
+
+        Returns:
+            List of inserted node IDs.
+        """
+        if not texts:
+            return []
+        if metadatas and len(metadatas) != len(texts):
+            raise ValueError("Length of metadatas must match length of texts.")
+
+        texts_embeds = self.embedding.get_text_embedding_batch(texts)
+        nodes = [
+            TextNode(
+                text=texts[idx],
+                embedding=embed,
+                metadata=metadatas[idx] if metadatas else {},
+            )
+            for idx, embed in enumerate(texts_embeds)
+        ]
+        self.store.insert_nodes(nodes)
+        # Persist so the newly added nodes survive across sessions.
+        self.persist()
+
+        return [n.node_id for n in nodes]
 
     def delete(self, *args, **kwargs):
         """Currently, faiss does not provide a delete interface."""
