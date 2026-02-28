@@ -573,14 +573,36 @@ class Plan(BaseModel):
         Args:
             task_id (str): The ID of the task to be reset.
         """
+        self._reset_task_impl(task_id, visited=set())
+
+    def _reset_task_impl(self, task_id: str, visited: set) -> None:
+        """Internal recursive helper for reset_task with cycle detection.
+
+        Args:
+            task_id: The task to reset.
+            visited: Set of task IDs already visited in this reset chain.
+                     Used to break cycles introduced by malformed LLM-generated plans.
+        """
+        if task_id in visited:
+            # Cycle detected — log and stop recursion.
+            from metagpt.logs import logger  # local import to avoid circular deps at module level
+
+            logger.warning(
+                f"Cyclic task dependency detected while resetting task '{task_id}'. "
+                "Stopping recursion to prevent infinite loop. "
+                "Check your task plan for circular dependencies."
+            )
+            return
+
+        visited.add(task_id)
+
         if task_id in self.task_map:
             task = self.task_map[task_id]
             task.reset()
-            # reset all downstream tasks that are dependent on the reset task
+            # Reset all downstream tasks that depend on the reset task.
             for dep_task in self.tasks:
                 if task_id in dep_task.dependent_task_ids:
-                    # FIXME: if LLM generates cyclic tasks, this will result in infinite recursion
-                    self.reset_task(dep_task.task_id)
+                    self._reset_task_impl(dep_task.task_id, visited)
 
         self._update_current_task()
 
@@ -602,10 +624,11 @@ class Plan(BaseModel):
                 self.tasks[i] = new_task
                 break
 
-        # Reset dependent tasks
+        # Reset dependent tasks (shared visited set to detect cycles across calls)
+        visited: set = set()
         for task in self.tasks:
             if new_task.task_id in task.dependent_task_ids:
-                self.reset_task(task.task_id)
+                self._reset_task_impl(task.task_id, visited)
 
         self._update_current_task()
 

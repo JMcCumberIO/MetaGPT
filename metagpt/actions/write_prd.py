@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import List, Optional, Union
@@ -437,13 +438,12 @@ class WritePRD(Action):
         Returns:
             A list of Document objects from `docs` that are considered related to `req`.
         """
-        # TODO: Consider using asyncio.gather for concurrent _is_related calls if performance is an issue,
-        # especially if 'docs' list can be very long.
-        related_documents = []
-        for doc in docs:
-            if await self._is_related(req, doc):
-                related_documents.append(doc)
-        return related_documents
+        if not docs:
+            return []
+        # Run all relatedness checks concurrently so that long doc lists don't
+        # block sequentially on LLM round-trips.
+        results = await asyncio.gather(*[self._is_related(req, doc) for doc in docs])
+        return [doc for doc, is_rel in zip(docs, results) if is_rel]
 
     async def _is_related(self, req: Document, old_prd: Document) -> bool:
         """Determines if a new requirement (`req`) is related to an existing PRD (`old_prd`).

@@ -10,7 +10,7 @@
 
 import warnings
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -221,21 +221,41 @@ class Team(BaseModel):
         return self.run_project(idea=idea, send_to=send_to)
 
     @serialize_decorator
-    async def run(self, n_round: int = 3, idea: str = "", send_to: str = "", auto_archive: bool = True):
-        """
-        Runs the team's project execution loop for a specified number of rounds or until completion/budget exhaustion.
+    async def run(
+        self,
+        n_round: int = 3,
+        idea: str = "",
+        send_to: str = "",
+        auto_archive: bool = True,
+        on_round_end: Optional[Callable[["Team", int], None]] = None,
+    ):
+        """Run the team's project execution loop.
 
         Args:
-            n_round: The maximum number of rounds to run the simulation. Defaults to 3.
-            idea: If provided, this idea is used to start a new project using `run_project`.
-            send_to: If `idea` is provided, this specifies the recipient for the initial project message.
-            auto_archive: If True, the environment will be archived after the run. Defaults to True.
+            n_round: Maximum number of rounds to run.  Defaults to 3.
+            idea: If provided, starts a new project with this idea.
+            send_to: Optional recipient name for the initial project message.
+            auto_archive: Archive environment state after the run.  Defaults to True.
+            on_round_end: Optional callback invoked after every completed round.
+                Signature: ``callback(team, rounds_remaining) -> None``.
+                Useful for progress reporting, logging, or updating external state
+                (e.g. a REST API or a WebSocket stream) without subclassing Team.
+                The callback is called synchronously; use ``asyncio.ensure_future``
+                inside it if you need non-blocking work.
 
         Returns:
-            A list of messages representing the history of the environment run.
+            List of messages representing the environment's run history.
 
         Raises:
-            NoMoneyException: If the project runs out of investment.
+            NoMoneyException: If the budget is exhausted.
+
+        Example::
+
+            def report(team, remaining):
+                cost = team.cost_manager.total_cost if team.cost_manager else 0
+                print(f"Round done – {remaining} left, cost so far: ${cost:.4f}")
+
+            await team.run(n_round=5, idea="Build a CLI todo app", on_round_end=report)
         """
         if idea:
             self.run_project(idea=idea, send_to=send_to)
@@ -244,16 +264,24 @@ class Team(BaseModel):
             logger.error("Environment is not initialized. Cannot run.")
             return []
 
+        max_round = n_round
         while n_round > 0:
-            # Check if all roles are idle; if so, the project might be completed or stuck.
+            # All roles idle → project complete or permanently stuck.
             if self.env.is_idle:
                 logger.debug("All roles are idle. Ending run.")
                 break
             n_round -= 1
-            self._check_balance()  # Check for budget constraints.
-            await self.env.run()   # Run one round of the environment.
+            self._check_balance()
+            await self.env.run()
 
-            logger.debug(f"Round completed. Max {n_round} rounds left.")
+            rounds_done = max_round - n_round
+            logger.debug(f"Round {rounds_done}/{max_round} completed. {n_round} rounds left.")
 
-        self.env.archive(auto_archive=auto_archive) # Archive the environment state.
+            if on_round_end is not None:
+                try:
+                    on_round_end(self, n_round)
+                except Exception as cb_exc:
+                    logger.warning(f"on_round_end callback raised an exception: {cb_exc}")
+
+        self.env.archive(auto_archive=auto_archive)
         return self.env.history

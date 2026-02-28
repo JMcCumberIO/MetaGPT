@@ -45,14 +45,31 @@ class CostManager(BaseModel):
             return
         self.total_prompt_tokens += prompt_tokens
         self.total_completion_tokens += completion_tokens
-        if model not in self.token_costs:
-            logger.warning(f"Model {model} not found in TOKEN_COSTS.")
-            return
 
-        cost = (
-            prompt_tokens * self.token_costs[model]["prompt"]
-            + completion_tokens * self.token_costs[model]["completion"]
-        ) / 1000
+        if model not in self.token_costs:
+            # Try a prefix match so that versioned names (e.g. "gpt-4o-2024-11-20")
+            # still resolve to a known entry (e.g. "gpt-4o").
+            matched = next(
+                (k for k in self.token_costs if model.startswith(k) or k.startswith(model)),
+                None,
+            )
+            if matched:
+                logger.debug(f"Model '{model}' not in TOKEN_COSTS; using '{matched}' as fallback.")
+                rates = self.token_costs[matched]
+            else:
+                # Last-resort: assume GPT-4o pricing as a conservative estimate.
+                _FALLBACK_PROMPT = 0.005
+                _FALLBACK_COMPLETION = 0.015
+                logger.warning(
+                    f"Model '{model}' not found in TOKEN_COSTS. "
+                    f"Using fallback rates (${_FALLBACK_PROMPT}/${_FALLBACK_COMPLETION} per 1k tokens). "
+                    "Add the model to TOKEN_COSTS for accurate tracking."
+                )
+                rates = {"prompt": _FALLBACK_PROMPT, "completion": _FALLBACK_COMPLETION}
+        else:
+            rates = self.token_costs[model]
+
+        cost = (prompt_tokens * rates["prompt"] + completion_tokens * rates["completion"]) / 1000
         self.total_cost += cost
         logger.info(
             f"Total running cost: ${self.total_cost:.3f} | Max budget: ${self.max_budget:.3f} | "

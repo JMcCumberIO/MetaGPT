@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import sys
 from asyncio import Queue
 from asyncio.subprocess import PIPE, STDOUT
 from typing import Optional
@@ -22,8 +23,13 @@ class Terminal:
     """
 
     def __init__(self):
-        self.shell_command = ["bash"]  # FIXME: should consider windows support later
-        self.command_terminator = "\n"
+        # Select the appropriate shell for the current platform.
+        if sys.platform == "win32":
+            self.shell_command = ["cmd.exe"]
+            self.command_terminator = "\r\n"
+        else:
+            self.shell_command = ["bash"]
+            self.command_terminator = "\n"
         self.stdout_queue = Queue(maxsize=1000)
         self.observer = TerminalReporter()
         self.process: Optional[asyncio.subprocess.Process] = None
@@ -35,13 +41,12 @@ class Terminal:
         }
 
     async def _start_process(self):
-        # Start a persistent shell process
+        # Start a persistent shell process using the platform-appropriate shell.
         self.process = await asyncio.create_subprocess_exec(
             *self.shell_command,
             stdin=PIPE,
             stdout=PIPE,
             stderr=STDOUT,
-            executable="bash",
             env=os.environ.copy(),
             cwd=DEFAULT_WORKSPACE_ROOT.absolute(),
         )

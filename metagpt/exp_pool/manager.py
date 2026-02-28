@@ -109,7 +109,11 @@ class ExperienceManager(BaseModel):
         nodes = await self.storage.aretrieve(req)
         exps: list[Experience] = [node.metadata["obj"] for node in nodes]
 
-        # TODO: filter by metadata
+        # Apply tag filter.  We check the Experience object directly here
+        # because most vector stores supported by MetaGPT don't expose a
+        # metadata pre-filter on aretrieve().  When the underlying store does
+        # support it (e.g. Chroma's `where` parameter) callers can pass
+        # kwargs through aretrieve() for a server-side filter instead.
         if tag:
             exps = [exp for exp in exps if exp.tag == tag]
 

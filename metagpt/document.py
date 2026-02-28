@@ -8,7 +8,7 @@
 """
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import FrozenSet, Optional, Union
 
 import pandas as pd
 from llama_index.core import Document, SimpleDirectoryReader
@@ -19,6 +19,24 @@ from tqdm import tqdm
 
 from metagpt.logs import logger
 from metagpt.repo_parser import RepoParser
+
+# ---------------------------------------------------------------------------
+# Supported file extensions for Repo.from_path() and Repo._set()
+# Keep these sets in sync.  Add new extensions here rather than inline below.
+# ---------------------------------------------------------------------------
+
+#: All file extensions loaded when walking a repository tree.
+REPO_LOADABLE_EXTENSIONS: FrozenSet[str] = frozenset(
+    {".json", ".txt", ".md", ".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".html", ".yaml", ".yml", ".toml"}
+)
+
+#: Subset of REPO_LOADABLE_EXTENSIONS that are treated as source-code files.
+REPO_CODE_EXTENSIONS: FrozenSet[str] = frozenset(
+    {".py", ".js", ".ts", ".jsx", ".tsx", ".css", ".html"}
+)
+
+#: Subset treated as documentation/prose.
+REPO_DOC_EXTENSIONS: FrozenSet[str] = frozenset({".md"})
 
 
 def validate_cols(content_col: str, df: pd.DataFrame):
@@ -186,8 +204,7 @@ class Repo(BaseModel):
         path.mkdir(parents=True, exist_ok=True)
         repo = Repo(path=path, name=path.name)
         for file_path in path.rglob("*"):
-            # FIXME: These judgments are difficult to support multiple programming languages and need to be more general
-            if file_path.is_file() and file_path.suffix in [".json", ".txt", ".md", ".py", ".js", ".css", ".html"]:
+            if file_path.is_file() and file_path.suffix.lower() in REPO_LOADABLE_EXTENSIONS:
                 repo._set(file_path.read_text(), file_path)
         return repo
 
@@ -205,10 +222,9 @@ class Repo(BaseModel):
         suffix = path.suffix
         doc = Document(content=content, path=path, name=str(path.relative_to(self.path)))
 
-        # FIXME: These judgments are difficult to support multiple programming languages and need to be more general
-        if suffix.lower() == ".md":
+        if suffix.lower() in REPO_DOC_EXTENSIONS:
             self.docs[path] = doc
-        elif suffix.lower() in [".py", ".js", ".css", ".html"]:
+        elif suffix.lower() in REPO_CODE_EXTENSIONS:
             self.codes[path] = doc
         else:
             self.assets[path] = doc

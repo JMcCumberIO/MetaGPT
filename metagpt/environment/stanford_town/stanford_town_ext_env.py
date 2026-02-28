@@ -3,9 +3,12 @@
 # @Desc   : The StanfordTown external environment to interate with the web interface
 #           refs to `generative_agents maze.py`
 
+import logging
 import math
 from pathlib import Path
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from pydantic import ConfigDict, Field, model_validator
 
@@ -255,6 +258,11 @@ class StanfordTownExtEnv(ExtEnv):
         try:
             self._execute_env_action(action)
         except Exception:
+            logger.error(
+                "Failed to execute environment action '%s'. Marking episode as terminated.",
+                action,
+                exc_info=True,
+            )
             terminated = True
 
         obs = self._get_obs()
