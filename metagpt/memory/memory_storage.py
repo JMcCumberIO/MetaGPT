@@ -21,11 +21,21 @@ class MemoryStorage(object):
     The memory storage with Faiss as ANN search engine
     """
 
-    def __init__(self, mem_ttl: int = MEM_TTL, embedding: BaseEmbedding = None):
+    def __init__(self, mem_ttl: int = MEM_TTL, embedding: BaseEmbedding = None, similarity_threshold: float = 0.5):
+        """Initialise MemoryStorage.
+
+        Args:
+            mem_ttl: Time-to-live for memories in seconds (reserved for future use).
+            embedding: Optional custom embedding model.  Defaults to the globally
+                configured embedding.
+            similarity_threshold: Minimum relevance score (0–1) that a retrieved
+                memory must reach to be included in search results.  A higher value
+                means only very relevant memories are returned.  Defaults to 0.5.
+        """
         self.role_id: str = None
         self.role_mem_path: str = None
-        self.mem_ttl: int = mem_ttl  # later use
-        self.threshold: float = 0.1  # experience value. TODO The threshold to filter similar memories
+        self.mem_ttl: int = mem_ttl  # reserved for future TTL-based eviction
+        self.similarity_threshold: float = similarity_threshold
         self._initialized: bool = False
         self.embedding = embedding or get_embedding()
 
@@ -58,15 +68,31 @@ class MemoryStorage(object):
         self.faiss_engine.add_objs([message])
         logger.info(f"Role {self.role_id}'s memory_storage add a message")
 
-    async def search_similar(self, message: Message, k=4) -> list[Message]:
-        """search for similar messages"""
-        # filter the result which score is smaller than the threshold
-        filtered_resp = []
+    async def search_similar(self, message: Message, k: int = 4) -> list[Message]:
+        """Return the *k* most similar stored messages above the similarity threshold.
+
+        Args:
+            message: The query message whose content is used for similarity search.
+            k: Maximum number of results to return.
+
+        Returns:
+            List of ``Message`` objects whose relevance score is at or above
+            ``self.similarity_threshold``, ordered by descending relevance.
+        """
         resp = await self.faiss_engine.aretrieve(message.content)
+        filtered: list[Message] = []
         for item in resp:
-            if item.score < self.threshold:
-                filtered_resp.append(item.metadata.get("obj"))
-        return filtered_resp
+            # llama_index retrieval nodes expose a `score` attribute.
+            # Higher scores indicate greater similarity.  We keep results that
+            # meet or exceed the configured threshold.
+            score = item.score if item.score is not None else 0.0
+            if score >= self.similarity_threshold:
+                obj = item.metadata.get("obj")
+                if obj is not None:
+                    filtered.append(obj)
+            if len(filtered) >= k:
+                break
+        return filtered
 
     def clean(self):
         shutil.rmtree(self.cache_dir, ignore_errors=True)
